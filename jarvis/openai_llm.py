@@ -1,17 +1,20 @@
 # openai_llm.py
 import os
-import openai
+from openai import OpenAI
+import json
 from typing import Dict, List
 from semantic_router import Route, RouteLayer
 from semantic_router.encoders import OpenAIEncoder
 
 class OpenAILLM:
     def __init__(self, api_key: str = None, function_routes: List[Route] = None):
+        print("API KEY: ", api_key)
         if api_key is None:
             api_key = os.getenv("OPENAI_API_KEY")
         if api_key is None:
             raise ValueError("OpenAI API key not found. Please set the OPENAI_API_KEY environment variable or provide the API key as an argument.")
-        openai.api_key = api_key
+
+        self.client = OpenAI(api_key=api_key)
 
         if function_routes is None:
             function_routes = []
@@ -21,81 +24,98 @@ class OpenAILLM:
 
     def generate_text(self, messages: List[Dict], task: str = "response") -> str:
         try:
-            response = openai.ChatCompletion.create(
-                model="gpt-3.5-turbo",  # or "gpt-4-turbo-preview" for more advanced tasks
+            print(f"OpenAILLM: Sending request to OpenAI API with messages: {messages}")
+            response = self.client.chat.completions.create(
+                model="gpt-3.5-turbo",
                 messages=messages,
-                temperature=0.7,
+                temperature=0.7
             )
+            print(f"OpenAILLM: Received response from OpenAI API: {response}")
             return response.choices[0].message.content.strip()
         except Exception as e:
-            print("Error:")
+            print("OpenAILLM: Error in generate_text:")
             print(str(e))
             raise e
 
     def extract_function_inputs(self, user_request: str) -> Dict:
         try:
+            print(f"OpenAILLM: Extracting function inputs for user request: {user_request}")
             route_choice = self.route_layer(user_request)
+            print(f"OpenAILLM: Route choice: {route_choice}")
 
-            if route_choice is None:
+            if route_choice is None or route_choice.name is None:
+                print("OpenAILLM: No matching route found.")
                 return {}
 
-            function_schema = route_choice.function_schema
-            prompt = f"Extract the input parameters for the following function from the user's request:\n\nFunction Schema:\n{function_schema}\n\nUser Request:\n{user_request}\n\nExtracted Inputs:"
+            # Find the corresponding Route object based on the route_choice.name
+            route = next((r for r in self.route_layer.routes if r.name == route_choice.name), None)
+            print(f"OpenAILLM: Selected route: {route}")
 
-            response = openai.ChatCompletion.create(
-                model="gpt-3.5-turbo",  # or "gpt-4-turbo-preview" for more advanced tasks
+            if route is None or route.function_schema is None:
+                print("OpenAILLM: No function schema found for the selected route.")
+                return {}
+
+            function_schema = route.function_schema
+            print(f"OpenAILLM: Function schema: {function_schema}")
+            prompt = f"""
+            You are an AI assistant designed to extract input parameters from user requests based on a provided function schema.
+
+            Function Schema:
+            {json.dumps(function_schema, indent=2)}
+
+            User Request:
+            {user_request}
+
+            Extract the input parameters from the user request and return them as a JSON object with the following format:
+            {{
+                "parameter_name_1": "parameter_value_1",
+                "parameter_name_2": "parameter_value_2",
+                ...
+            }}
+
+            If a parameter is not provided in the user request, omit it from the JSON object. Ensure that the parameter names exactly match those defined in the function schema.
+
+            Extracted Inputs:
+            """
+
+            print(f"OpenAILLM: Sending request to OpenAI API with prompt: {prompt}")
+            response = self.client.chat.completions.create(
+                model="gpt-3.5-turbo",
                 messages=[
-                    {"role": "system", "content": "You are a helpful assistant designed to extract input parameters from user requests based on the provided function schema."},
+                    {"role": "system", "content": "You are an AI assistant designed to extract input parameters from user requests based on a provided function schema."},
                     {"role": "user", "content": prompt}
                 ],
-                temperature=0.7,
+                temperature=0.7
             )
+            print(f"OpenAILLM: Received response from OpenAI API: {response}")
             extracted_inputs_str = response.choices[0].message.content.strip()
-            extracted_inputs = eval(extracted_inputs_str)
-            return extracted_inputs
+            print(f"OpenAILLM: Extracted inputs string: {extracted_inputs_str}")
+            try:
+                extracted_inputs = json.loads(extracted_inputs_str)
+                print(f"OpenAILLM: Extracted inputs (before validation): {extracted_inputs}")
+                # Validate the extracted inputs against the function schema
+                valid_inputs = {}
+                for param_name, param_value in extracted_inputs.items():
+                    if param_name in function_schema["parameters"]["properties"]:
+                        valid_inputs[param_name] = param_value
+                    else:
+                        print(f"OpenAILLM: Invalid parameter name: {param_name}")
+
+                for param_name in function_schema["parameters"]["required"]:
+                    if param_name not in valid_inputs:
+                        raise ValueError(f"Missing required parameter: {param_name}")
+
+                print(f"OpenAILLM: Extracted inputs (after validation): {valid_inputs}")
+                return valid_inputs
+            except (json.JSONDecodeError, ValueError) as e:
+                print("OpenAILLM: Error parsing or validating extracted inputs:")
+                print(str(e))
+                print("OpenAILLM: Extracted inputs string:")
+                print(extracted_inputs_str)
+                return {}
         except Exception as e:
-            print("Error:")
+            print("OpenAILLM: Error in extract_function_inputs:")
             print(str(e))
             raise e
 
-if __name__ == "__main__":
-    # Define function routes
-    function_routes = [
-        Route(
-            name="open_file_and_explain",
-            utterances=[
-                "explain the contents of {file_name}",
-                "open {file_name} and explain it",
-                "tell me about {file_name}",
-            ],
-            function_schema={
-                "name": "open_file_and_explain",
-                "description": "Open a file in the workspace folder and explain its contents",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "file_name": {
-                            "type": "string",
-                            "description": "The name of the file to open",
-                        },
-                    },
-                    "required": ["file_name"],
-                },
-            },
-        ),
-        # Add more function routes as needed
-    ]
-
-    openai_llm = OpenAILLM(function_routes=function_routes)
-
-    # Example usage
-    messages = [
-        {"role": "system", "content": "You are a helpful assistant."},
-        {"role": "user", "content": "Who won the world series in 2020?"},
-    ]
-    response = openai_llm.generate_text(messages)
-    print(response)
-
-    user_request = "explain the contents of example.py"
-    extracted_inputs = openai_llm.extract_function_inputs(user_request)
-    print(extracted_inputs)
+# Rest of the code remains the same
