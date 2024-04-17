@@ -1,6 +1,11 @@
 # openai_llm.py
 import os
+from dotenv import load_dotenv
 from openai import OpenAI
+load_dotenv()
+api_key = os.getenv('OPENAI_API_KEY')
+client = OpenAI(api_key=api_key)
+
 import json
 from typing import Dict, List
 from semantic_router import Route, RouteLayer
@@ -8,6 +13,11 @@ from semantic_router.encoders import OpenAIEncoder
 
 class OpenAILLM:
     def __init__(self, api_key: str = None, function_routes: List[Route] = None):
+
+        load_dotenv()
+        api_key = os.getenv('OPENAI_API_KEY')
+        client = OpenAI(api_key=api_key)
+
         print("API KEY: ", api_key)
         if api_key is None:
             api_key = os.getenv("OPENAI_API_KEY")
@@ -37,43 +47,28 @@ class OpenAILLM:
             print(str(e))
             raise e
 
-    def extract_function_inputs(self, user_request: str) -> Dict:
+    def extract_function_inputs(self, query: str, function_schema: Dict[str, any]) -> Dict[str, any]:
         try:
-            print(f"OpenAILLM: Extracting function inputs for user request: {user_request}")
-            route_choice = self.route_layer(user_request)
-            print(f"OpenAILLM: Route choice: {route_choice}")
-
-            if route_choice is None or route_choice.name is None:
-                print("OpenAILLM: No matching route found.")
-                return {}
-
-            # Find the corresponding Route object based on the route_choice.name
-            route = next((r for r in self.route_layer.routes if r.name == route_choice.name), None)
-            print(f"OpenAILLM: Selected route: {route}")
-
-            if route is None or route.function_schema is None:
-                print("OpenAILLM: No function schema found for the selected route.")
-                return {}
-
-            function_schema = route.function_schema
+            print(f"OpenAILLM: Extracting function inputs for query: {query}")
             print(f"OpenAILLM: Function schema: {function_schema}")
+
             prompt = f"""
-            You are an AI assistant designed to extract input parameters from user requests based on a provided function schema.
+            You are an AI assistant designed to extract input parameters from user queries based on a provided function schema.
 
             Function Schema:
             {json.dumps(function_schema, indent=2)}
 
-            User Request:
-            {user_request}
+            User Query:
+            {query}
 
-            Extract the input parameters from the user request and return them as a JSON object with the following format:
+            Extract the input parameters from the user query and return them as a JSON object with the following format:
             {{
                 "parameter_name_1": "parameter_value_1",
                 "parameter_name_2": "parameter_value_2",
                 ...
             }}
 
-            If a parameter is not provided in the user request, omit it from the JSON object. Ensure that the parameter names exactly match those defined in the function schema.
+            If a parameter is not provided in the user query, omit it from the JSON object. Ensure that the parameter names exactly match those defined in the function schema.
 
             Extracted Inputs:
             """
@@ -82,7 +77,7 @@ class OpenAILLM:
             response = self.client.chat.completions.create(
                 model="gpt-3.5-turbo",
                 messages=[
-                    {"role": "system", "content": "You are an AI assistant designed to extract input parameters from user requests based on a provided function schema."},
+                    {"role": "system", "content": "You are an AI assistant designed to extract input parameters from user queries based on a provided function schema."},
                     {"role": "user", "content": prompt}
                 ],
                 temperature=0.7
@@ -118,4 +113,3 @@ class OpenAILLM:
             print(str(e))
             raise e
 
-# Rest of the code remains the same

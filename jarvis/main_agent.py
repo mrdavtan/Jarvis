@@ -3,6 +3,19 @@ import os
 import subprocess
 from openai_llm import OpenAILLM
 from semantic_router import Route
+from semantic_router.encoders import OpenAIEncoder
+
+from dotenv import load_dotenv
+from openai import OpenAI
+load_dotenv()
+api_key = os.getenv('OPENAI_API_KEY')
+client = OpenAI(api_key=api_key)
+
+print("main_agent API KEY: ", api_key)
+
+
+
+encoder = OpenAIEncoder()
 
 class MainAgent:
     def __init__(self, workspace_folder):
@@ -76,6 +89,7 @@ class MainAgent:
         # Initialize the OpenAILLM with the function routes
         self.llm = OpenAILLM(function_routes=self.function_routes)
 
+
     def process_user_request(self, request):
         print(f"MainAgent: Processing user request: {request}")
         # Extract function inputs using Semantic Router
@@ -89,10 +103,21 @@ class MainAgent:
         function_name = route_choice.name
         print(f"MainAgent: Function name: {function_name}")
 
+        # Find the corresponding Route object based on the route_choice.name
+        route = next((r for r in self.function_routes if r.name == function_name), None)
+
+        if route is None or route.function_schema is None:
+            print("MainAgent: No function schema found for the selected route.")
+            return "I apologize, but I don't know how to handle that request."
+
+        # Extract function inputs using OpenAILLM
+        function_inputs = self.llm.extract_function_inputs(request, route.function_schema)
+        print(f"MainAgent: Function inputs: {function_inputs}")
+
         if function_name == "list_workspace_contents":
             return self.list_workspace_contents()
         elif function_name == "open_file_and_explain":
-            file_name = route_choice.function_call.get("file_name")
+            file_name = function_inputs.get("file_name")
             if file_name:
                 print(f"MainAgent: File name: {file_name}")
                 return self.open_file_and_explain(file_name)
@@ -100,7 +125,7 @@ class MainAgent:
                 print("MainAgent: File name not provided.")
                 return "Please provide a valid file name."
         elif function_name == "execute_file_and_explain_output":
-            file_name = route_choice.function_call.get("file_name")
+            file_name = function_inputs.get("file_name")
             if file_name:
                 print(f"MainAgent: File name: {file_name}")
                 return self.execute_file_and_explain_output(file_name)
@@ -110,6 +135,7 @@ class MainAgent:
         else:
             print("MainAgent: Unknown function name.")
             return "I apologize, but I don't know how to handle that request."
+
 
     def list_workspace_contents(self):
         try:
