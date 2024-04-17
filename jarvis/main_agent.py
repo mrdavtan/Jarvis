@@ -3,6 +3,8 @@ import os
 import subprocess
 from local_llm_function_calling import Generator
 from llm_module import LLMModule
+from semantic_router import Route, RouteLayer
+from semantic_router.encoders import CohereEncoder, OpenAIEncoder
 
 class MainAgent:
     def __init__(self, workspace_folder, model_name):
@@ -54,19 +56,52 @@ class MainAgent:
 
         # Initialize the generator with the functions and the LLM model
         self.generator = Generator.hf(self.functions, self.llm_module.model)
+        self.initialize_route_layer()
+
+    def initialize_route_layer(self):
+        routes = [
+            Route(
+                name="list_workspace_contents",
+                utterances=[
+                    "list the files in the workspace",
+                    "show me the workspace contents",
+                    "what files are in the workspace?",
+                ],
+                function_schema=self.functions[0],
+            ),
+            Route(
+                name="open_file_and_explain",
+                utterances=[
+                    "explain the contents of {file_name}",
+                    "open {file_name} and explain it",
+                    "tell me about {file_name}",
+                ],
+                function_schema=self.functions[1],
+            ),
+            Route(
+                name="execute_file_and_explain_output",
+                utterances=[
+                    "run {file_name} and explain the output",
+                    "execute {file_name} and tell me what it does",
+                    "what happens when I run {file_name}?",
+                ],
+                function_schema=self.functions[2],
+            ),
+        ]
+
+        encoder = OpenAIEncoder()  # or CohereEncoder()
+        self.route_layer = RouteLayer(encoder=encoder, routes=routes)
 
     def process_user_request(self, request):
-        # Generate the function call using the generator
-        function_call = self.generator.generate(request)
+        route_choice = self.route_layer(request)
 
-        # Execute the function based on the generated function call
-        if function_call["name"] == "list_workspace_contents":
+        if route_choice.name == "list_workspace_contents":
             return self.list_workspace_contents()
-        elif function_call["name"] == "open_file_and_explain":
-            file_name = function_call["parameters"]["file_name"]
+        elif route_choice.name == "open_file_and_explain":
+            file_name = route_choice.function_call["parameters"]["file_name"]
             return self.open_file_and_explain(file_name)
-        elif function_call["name"] == "execute_file_and_explain_output":
-            file_name = function_call["parameters"]["file_name"]
+        elif route_choice.name == "execute_file_and_explain_output":
+            file_name = route_choice.function_call["parameters"]["file_name"]
             return self.execute_file_and_explain_output(file_name)
         else:
             return "I apologize, but I don't know how to handle that request."
@@ -117,7 +152,7 @@ class MainAgent:
             return f"An error occurred while explaining the file output:\n{e}"
 
 if __name__ == '__main__':
-    workspace_folder = '/path/to/your/workspace'
+    workspace_folder = './workspace'
     model_name = 'mistralai/Mistral-7B-Instruct-v0.1'
 
     main_agent = MainAgent(workspace_folder, model_name)
