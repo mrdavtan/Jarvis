@@ -1,65 +1,15 @@
 # main_agent.py
 import os
 import subprocess
-from local_llm_function_calling import Generator
-from llm_module import LLMModule
-from semantic_router import Route, RouteLayer
-from semantic_router.encoders import CohereEncoder, OpenAIEncoder
+from openai_llm import OpenAILLM
+from semantic_router import Route
 
 class MainAgent:
-    def __init__(self, workspace_folder, model_name):
+    def __init__(self, workspace_folder):
         self.workspace_folder = workspace_folder
-        self.llm_module = LLMModule(model_name)
-        self.llm_module.load_model()
-        self.llm_module.load_pipelines()
 
-        # Define the functions for the generator
-        self.functions = [
-            {
-                "name": "list_workspace_contents",
-                "description": "List the files and directories in the workspace folder",
-                "parameters": {
-                    "type": "object",
-                    "properties": {},
-                    "required": [],
-                },
-            },
-            {
-                "name": "open_file_and_explain",
-                "description": "Open a file in the workspace folder and explain its contents",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "file_name": {
-                            "type": "string",
-                            "description": "The name of the file to open",
-                        },
-                    },
-                    "required": ["file_name"],
-                },
-            },
-            {
-                "name": "execute_file_and_explain_output",
-                "description": "Execute a Python file in the workspace folder and explain its output",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "file_name": {
-                            "type": "string",
-                            "description": "The name of the Python file to execute",
-                        },
-                    },
-                    "required": ["file_name"],
-                },
-            },
-        ]
-
-        # Initialize the generator with the functions and the LLM model
-        self.generator = Generator.hf(self.functions, self.llm_module.model)
-        self.initialize_route_layer()
-
-    def initialize_route_layer(self):
-        routes = [
+        # Define the function routes
+        self.function_routes = [
             Route(
                 name="list_workspace_contents",
                 utterances=[
@@ -67,7 +17,15 @@ class MainAgent:
                     "show me the workspace contents",
                     "what files are in the workspace?",
                 ],
-                function_schema=self.functions[0],
+                function_schema={
+                    "name": "list_workspace_contents",
+                    "description": "List the files and directories in the workspace folder",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {},
+                        "required": [],
+                    },
+                },
             ),
             Route(
                 name="open_file_and_explain",
@@ -76,7 +34,20 @@ class MainAgent:
                     "open {file_name} and explain it",
                     "tell me about {file_name}",
                 ],
-                function_schema=self.functions[1],
+                function_schema={
+                    "name": "open_file_and_explain",
+                    "description": "Open a file in the workspace folder and explain its contents",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "file_name": {
+                                "type": "string",
+                                "description": "The name of the file to open",
+                            },
+                        },
+                        "required": ["file_name"],
+                    },
+                },
             ),
             Route(
                 name="execute_file_and_explain_output",
@@ -85,26 +56,54 @@ class MainAgent:
                     "execute {file_name} and tell me what it does",
                     "what happens when I run {file_name}?",
                 ],
-                function_schema=self.functions[2],
+                function_schema={
+                    "name": "execute_file_and_explain_output",
+                    "description": "Execute a Python file in the workspace folder and explain its output",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "file_name": {
+                                "type": "string",
+                                "description": "The name of the Python file to execute",
+                            },
+                        },
+                        "required": ["file_name"],
+                    },
+                },
             ),
         ]
 
-        encoder = OpenAIEncoder()  # or CohereEncoder()
-        self.route_layer = RouteLayer(encoder=encoder, routes=routes)
+        # Initialize the OpenAILLM with the function routes
+        self.llm = OpenAILLM(function_routes=self.function_routes)
 
     def process_user_request(self, request):
-        route_choice = self.route_layer(request)
+        # Extract function inputs using Semantic Router
+        function_inputs = self.llm.extract_function_inputs(request)
 
-        if route_choice.name == "list_workspace_contents":
+        if not function_inputs:
+            return "I apologize, but I don't know how to handle that request."
+
+        function_name = function_inputs["name"]
+
+        if function_name == "list_workspace_contents":
             return self.list_workspace_contents()
-        elif route_choice.name == "open_file_and_explain":
-            file_name = route_choice.function_call["parameters"]["file_name"]
+        elif function_name == "open_file_and_explain":
+            file_name = function_inputs["parameters"]["file_name"]
             return self.open_file_and_explain(file_name)
-        elif route_choice.name == "execute_file_and_explain_output":
-            file_name = route_choice.function_call["parameters"]["file_name"]
+        elif function_name == "execute_file_and_explain_output":
+            file_name = function_inputs["parameters"]["file_name"]
             return self.execute_file_and_explain_output(file_name)
         else:
             return "I apologize, but I don't know how to handle that request."
+
+    def extract_file_name(self, request):
+        # Extract the file name from the user's request
+        # You can use regular expressions or string manipulation techniques
+        # to extract the file name based on the route's utterance patterns
+        # For example, if the user's request is "explain the contents of example.py"
+        # you can extract "example.py" as the file name
+        # Return the extracted file name if found, otherwise return None
+        pass
 
     def list_workspace_contents(self):
         try:
@@ -151,13 +150,14 @@ class MainAgent:
         except Exception as e:
             return f"An error occurred while explaining the file output:\n{e}"
 
+
 if __name__ == '__main__':
     workspace_folder = './workspace'
-    model_name = 'mistralai/Mistral-7B-Instruct-v0.1'
 
-    main_agent = MainAgent(workspace_folder, model_name)
+    main_agent = MainAgent(workspace_folder)
 
     while True:
         user_request = input("User: ")
         response = main_agent.process_user_request(user_request)
         print("Assistant:", response)
+
