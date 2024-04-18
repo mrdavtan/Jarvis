@@ -53,9 +53,125 @@ assistant = client.beta.assistants.create(
                     "required": []
                 }
             }
+        },
+
+        {
+            "type": "function",
+            "function": {
+                "name": "read_file",
+                "description": "Read the contents of a file",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "file_path": {
+                            "type": "string",
+                            "description": "The path to the file to read"
+                        }
+                    },
+                    "required": ["file_path"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "execute_file",
+                "description": "Execute a file",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "file_path": {
+                            "type": "string",
+                            "description": "The path to the file to execute"
+                        }
+                    },
+                    "required": ["file_path"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "copy_file_or_directory",
+                "description": "Copy a file or directory to another directory",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "src_path": {
+                            "type": "string",
+                            "description": "The path to the source file or directory"
+                        },
+                        "dst_path": {
+                            "type": "string",
+                            "description": "The path to the destination directory"
+                        }
+                    },
+                    "required": ["src_path", "dst_path"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "remove_file_or_directory",
+                "description": "Remove a file or directory",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "The path to the file or directory to remove"
+                        }
+                    },
+                    "required": ["path"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "read_script_output",
+                "description": "Read the output of a script",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "script_path": {
+                            "type": "string",
+                            "description": "The path to the script to execute"
+                        }
+                    },
+                    "required": ["script_path"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "activate_virtual_env",
+                "description": "Activate a virtual environment",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "venv_path": {
+                            "type": "string",
+                            "description": "The path to the virtual environment"
+                        }
+                    },
+                    "required": ["venv_path"]
+                }
+            }
         }
     ]
 )
+
+
+
+
+
+
+
+
+
 
 current_directory = os.getcwd()
 
@@ -86,6 +202,8 @@ class EventHandler(AssistantEventHandler):
                 tool_outputs.append({"tool_call_id": tool.id, "output": current_directory})
 
         self.submit_tool_outputs(tool_outputs, run_id)
+
+    current_directory = os.getcwd()
 
     def submit_tool_outputs(self, tool_outputs, run_id):
         with client.beta.threads.runs.submit_tool_outputs_stream(
