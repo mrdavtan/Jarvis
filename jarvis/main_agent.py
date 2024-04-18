@@ -1,205 +1,120 @@
-# main_agent.py
 import os
-import subprocess
-from openai_llm import OpenAILLM
-from semantic_router import Route
-from semantic_router.encoders import OpenAIEncoder
-
+import json
+from openai import OpenAI, AssistantEventHandler
 from dotenv import load_dotenv
-from openai import OpenAI
 load_dotenv()
 api_key = os.getenv('OPENAI_API_KEY')
 client = OpenAI(api_key=api_key)
+import os
 
-print("main_agent API KEY: ", api_key)
+client = OpenAI()
 
-
-
-encoder = OpenAIEncoder()
-
-class MainAgent:
-    def __init__(self, workspace_folder):
-        self.workspace_folder = workspace_folder
-
-        # Define the function routes
-        self.function_routes = [
-            Route(
-                name="list_workspace_contents",
-                utterances=[
-                    "list the files in the workspace",
-                    "show me the workspace contents",
-                    "what files are in the workspace?",
-                ],
-                function_schema={
-                    "name": "list_workspace_contents",
-                    "description": "List the files and directories in the workspace folder",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {},
-                        "required": [],
+assistant = client.beta.assistants.create(
+    instructions="You are a directory navigation assistant. Use the provided functions to navigate and list directory contents.",
+    model="gpt-4-turbo",
+    tools=[
+        {
+            "type": "function",
+            "function": {
+                "name": "list_directory_contents",
+                "description": "List the contents of the current directory",
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "required": []
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "change_directory",
+                "description": "Change the current directory",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "directory": {
+                            "type": "string",
+                            "description": "The directory to change to (relative or absolute path)"
+                        }
                     },
-                },
-            ),
-            Route(
-                name="open_file_and_explain",
-                utterances=[
-                    "explain the contents of {file_name}",
-                    "open {file_name} and explain it",
-                    "tell me about {file_name}",
-                ],
-                function_schema={
-                    "name": "open_file_and_explain",
-                    "description": "Open a file in the workspace folder and explain its contents",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "file_name": {
-                                "type": "string",
-                                "description": "The name of the file to open",
-                            },
-                        },
-                        "required": ["file_name"],
-                    },
-                },
-            ),
-            Route(
-                name="execute_file_and_explain_output",
-                utterances=[
-                    "run {file_name} and explain the output",
-                    "execute {file_name} and tell me what it does",
-                    "what happens when I run {file_name}?",
-                ],
-                function_schema={
-                    "name": "execute_file_and_explain_output",
-                    "description": "Execute a Python file in the workspace folder and explain its output",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "file_name": {
-                                "type": "string",
-                                "description": "The name of the Python file to execute",
-                            },
-                        },
-                        "required": ["file_name"],
-                    },
-                },
-            ),
-        ]
+                    "required": ["directory"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_directory",
+                "description": "Get the current working directory",
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "required": []
+                }
+            }
+        }
+    ]
+)
 
-        # Initialize the OpenAILLM with the function routes
-        self.llm = OpenAILLM(function_routes=self.function_routes)
+current_directory = os.getcwd()
 
+class EventHandler(AssistantEventHandler):
+    def on_event(self, event):
+        global current_directory
+        if event.event == 'thread.run.requires_action':
+            run_id = event.data.id
+            self.handle_requires_action(event.data, run_id)
 
-    def process_user_request(self, request):
-        print(f"MainAgent: Processing user request: {request}")
-        # Extract function inputs using Semantic Router
-        route_choice = self.llm.route_layer(request)
-        print(f"MainAgent: Route choice: {route_choice}")
+    def handle_requires_action(self, data, run_id):
+        global current_directory
+        tool_outputs = []
 
-        if route_choice is None or route_choice.name is None:
-            print("MainAgent: No matching route found.")
-            return "I apologize, but I don't know how to handle that request."
+        for tool in data.required_action.submit_tool_outputs.tool_calls:
+            if tool.function.name == "list_directory_contents":
+                contents = os.listdir(current_directory)
+                tool_outputs.append({"tool_call_id": tool.id, "output": ", ".join(contents)})
+            elif tool.function.name == "change_directory":
+                directory = json.loads(tool.function.arguments)["directory"]
+                new_directory = os.path.abspath(os.path.join(current_directory, directory))
+                if os.path.exists(new_directory) and os.path.isdir(new_directory):
+                    current_directory = new_directory
+                    tool_outputs.append({"tool_call_id": tool.id, "output": f"Changed current directory to {current_directory}"})
+                else:
+                    tool_outputs.append({"tool_call_id": tool.id, "output": "Invalid directory"})
+            elif tool.function.name == "get_current_directory":
+                tool_outputs.append({"tool_call_id": tool.id, "output": current_directory})
 
-        function_name = route_choice.name
-        print(f"MainAgent: Function name: {function_name}")
+        self.submit_tool_outputs(tool_outputs, run_id)
 
-        # Find the corresponding Route object based on the route_choice.name
-        route = next((r for r in self.function_routes if r.name == function_name), None)
+    def submit_tool_outputs(self, tool_outputs, run_id):
+        with client.beta.threads.runs.submit_tool_outputs_stream(
+            thread_id=self.current_run.thread_id,
+            run_id=self.current_run.id,
+            tool_outputs=tool_outputs,
+            event_handler=EventHandler(),
+        ) as stream:
+            for text in stream.text_deltas:
+                print(text, end="", flush=True)
+            print()
 
-        if route is None or route.function_schema is None:
-            print("MainAgent: No function schema found for the selected route.")
-            return "I apologize, but I don't know how to handle that request."
+while True:
+    user_input = input("User: ")
+    if user_input.lower() == 'exit':
+        break
 
-        # Extract function inputs using OpenAILLM
-        function_inputs = self.llm.extract_function_inputs(request, route.function_schema)
-        print(f"MainAgent: Function inputs: {function_inputs}")
+    thread = client.beta.threads.create()
+    message = client.beta.threads.messages.create(
+        thread_id=thread.id,
+        role="user",
+        content=user_input,
+    )
 
-        if function_name == "list_workspace_contents":
-            return self.list_workspace_contents()
-        elif function_name == "open_file_and_explain":
-            file_name = function_inputs.get("file_name")
-            if file_name:
-                print(f"MainAgent: File name: {file_name}")
-                return self.open_file_and_explain(file_name)
-            else:
-                print("MainAgent: File name not provided.")
-                return "Please provide a valid file name."
-        elif function_name == "execute_file_and_explain_output":
-            file_name = function_inputs.get("file_name")
-            if file_name:
-                print(f"MainAgent: File name: {file_name}")
-                return self.execute_file_and_explain_output(file_name)
-            else:
-                print("MainAgent: File name not provided.")
-                return "Please provide a valid file name."
-        else:
-            print("MainAgent: Unknown function name.")
-            return "I apologize, but I don't know how to handle that request."
+    with client.beta.threads.runs.stream(
+        thread_id=thread.id,
+        assistant_id=assistant.id,
+        event_handler=EventHandler()
+    ) as stream:
+        stream.until_done()
 
 
-    def list_workspace_contents(self):
-        try:
-            print(f"MainAgent: Listing workspace contents in {self.workspace_folder}")
-            contents = os.listdir(self.workspace_folder)
-            response = "The workspace folder contains the following files and directories:\n"
-            for item in contents:
-                response += f"- {item}\n"
-            return response.strip()
-        except FileNotFoundError:
-            print(f"MainAgent: Workspace folder not found: {self.workspace_folder}")
-            return f"Sorry, the workspace folder '{self.workspace_folder}' does not exist."
-        except Exception as e:
-            print(f"MainAgent: Error listing workspace contents: {e}")
-            return f"An error occurred while listing the workspace contents:\n{e}"
-
-    def open_file_and_explain(self, file_name):
-        file_path = os.path.join(self.workspace_folder, file_name)
-
-        if not os.path.exists(file_path):
-            print(f"MainAgent: File not found: {file_path}")
-            return f"Sorry, the file '{file_name}' does not exist in the workspace folder."
-
-        try:
-            print(f"MainAgent: Opening file: {file_path}")
-            with open(file_path, 'r') as file:
-                content = file.read()
-
-            print(f"MainAgent: Generating explanation for file: {file_name}")
-            prompt = f"Explain the contents of the following file:\n\n{content}\n\nExplanation:"
-            explanation = self.llm.generate_text([{"role": "system", "content": prompt}])
-            return explanation.strip()
-        except Exception as e:
-            print(f"MainAgent: Error opening and explaining file: {e}")
-            return f"An error occurred while opening and explaining the file:\n{e}"
-
-    def execute_file_and_explain_output(self, file_name):
-        file_path = os.path.join(self.workspace_folder, file_name)
-
-        if not os.path.exists(file_path):
-            print(f"MainAgent: File not found: {file_path}")
-            return f"Sorry, the file '{file_name}' does not exist in the workspace folder."
-
-        try:
-            print(f"MainAgent: Executing file: {file_path}")
-            output = subprocess.check_output(['python', file_path], universal_newlines=True)
-
-            print(f"MainAgent: Generating explanation for file output: {file_name}")
-            prompt = f"Explain the output of the executed Python file:\n\n{output}\n\nExplanation:"
-            explanation = self.llm.generate_text([{"role": "system", "content": prompt}])
-            return explanation.strip()
-        except subprocess.CalledProcessError as e:
-            print(f"MainAgent: Error executing file: {e}")
-            return f"An error occurred while executing the file:\n{e}"
-        except Exception as e:
-            print(f"MainAgent: Error explaining file output: {e}")
-            return f"An error occurred while explaining the file output:\n{e}"
-
-if __name__ == '__main__':
-    workspace_folder = './workspace'
-
-    main_agent = MainAgent(workspace_folder)
-
-    while True:
-        user_request = input("User: ")
-        response = main_agent.process_user_request(user_request)
-        print("Assistant:", response)
