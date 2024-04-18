@@ -164,15 +164,6 @@ assistant = client.beta.assistants.create(
     ]
 )
 
-
-
-
-
-
-
-
-
-
 current_directory = os.getcwd()
 
 class EventHandler(AssistantEventHandler):
@@ -200,10 +191,62 @@ class EventHandler(AssistantEventHandler):
                     tool_outputs.append({"tool_call_id": tool.id, "output": "Invalid directory"})
             elif tool.function.name == "get_current_directory":
                 tool_outputs.append({"tool_call_id": tool.id, "output": current_directory})
+            elif tool.function.name == "read_file":
+                file_path = json.loads(tool.function.arguments)["file_path"]
+                try:
+                    with open(file_path, 'r') as file:
+                        content = file.read()
+                    tool_outputs.append({"tool_call_id": tool.id, "output": content})
+                except FileNotFoundError:
+                    tool_outputs.append({"tool_call_id": tool.id, "output": "File not found"})
+            elif tool.function.name == "execute_file":
+                file_path = json.loads(tool.function.arguments)["file_path"]
+                try:
+                    output = subprocess.check_output(file_path, shell=True, universal_newlines=True)
+                    tool_outputs.append({"tool_call_id": tool.id, "output": output})
+                except subprocess.CalledProcessError as e:
+                    tool_outputs.append({"tool_call_id": tool.id, "output": f"Error executing file: {str(e)}"})
+            elif tool.function.name == "copy_file_or_directory":
+                src_path = json.loads(tool.function.arguments)["src_path"]
+                dst_path = json.loads(tool.function.arguments)["dst_path"]
+                try:
+                    if os.path.isfile(src_path):
+                        shutil.copy(src_path, dst_path)
+                    elif os.path.isdir(src_path):
+                        shutil.copytree(src_path, dst_path)
+                    tool_outputs.append({"tool_call_id": tool.id, "output": "Copy successful"})
+                except FileNotFoundError:
+                    tool_outputs.append({"tool_call_id": tool.id, "output": "Source file or directory not found"})
+                except shutil.SameFileError:
+                    tool_outputs.append({"tool_call_id": tool.id, "output": "Source and destination are the same"})
+            elif tool.function.name == "remove_file_or_directory":
+                path = json.loads(tool.function.arguments)["path"]
+                try:
+                    if os.path.isfile(path):
+                        os.remove(path)
+                    elif os.path.isdir(path):
+                        shutil.rmtree(path)
+                    tool_outputs.append({"tool_call_id": tool.id, "output": "Removal successful"})
+                except FileNotFoundError:
+                    tool_outputs.append({"tool_call_id": tool.id, "output": "File or directory not found"})
+            elif tool.function.name == "read_script_output":
+                script_path = json.loads(tool.function.arguments)["script_path"]
+                try:
+                    output = subprocess.check_output(script_path, shell=True, universal_newlines=True)
+                    tool_outputs.append({"tool_call_id": tool.id, "output": output})
+                except subprocess.CalledProcessError as e:
+                    tool_outputs.append({"tool_call_id": tool.id, "output": f"Error executing script: {str(e)}"})
+            elif tool.function.name == "activate_virtual_env":
+                venv_path = json.loads(tool.function.arguments)["venv_path"]
+                try:
+                    os.system(f"source {venv_path}/bin/activate")
+                    tool_outputs.append({"tool_call_id": tool.id, "output": "Virtual environment activated"})
+                except Exception as e:
+                    tool_outputs.append({"tool_call_id": tool.id, "output": f"Error activating virtual environment: {str(e)}"})
 
         self.submit_tool_outputs(tool_outputs, run_id)
 
-    current_directory = os.getcwd()
+
 
     def submit_tool_outputs(self, tool_outputs, run_id):
         with client.beta.threads.runs.submit_tool_outputs_stream(
