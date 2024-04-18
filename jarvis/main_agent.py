@@ -1,6 +1,7 @@
 import os
 import subprocess
 import select
+import uuid
 import sys
 import shutil
 import json
@@ -9,7 +10,21 @@ from dotenv import load_dotenv
 load_dotenv()
 api_key = os.getenv('OPENAI_API_KEY')
 client = OpenAI(api_key=api_key)
-import os
+
+import termios
+import tty
+
+def getch():
+    fd = sys.stdin.fileno()
+    old_settings = termios.tcgetattr(fd)
+    try:
+        tty.setraw(sys.stdin.fileno())
+        ch = sys.stdin.read(1)
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+    return ch
+
+
 
 # Load the configuration file
 with open("config.json") as config_file:
@@ -182,8 +197,6 @@ class EventHandler(AssistantEventHandler):
             run_id = event.data.id
             self.handle_requires_action(event.data, run_id)
 
-
-
     def handle_requires_action(self, data, run_id):
         global current_directory
         tool_outputs = []
@@ -194,10 +207,7 @@ class EventHandler(AssistantEventHandler):
                 tool_outputs.append({"tool_call_id": tool.id, "output": ", ".join(contents)})
             elif tool.function.name == "change_directory":
                 directory = json.loads(tool.function.arguments)["directory"]
-                if directory in config["directories"]:
-                    new_directory = config["directories"][directory]
-                else:
-                    new_directory = os.path.abspath(os.path.join(current_directory, directory))
+                new_directory = os.path.abspath(os.path.join(current_directory, directory))
 
                 if os.path.exists(new_directory) and os.path.isdir(new_directory):
                     current_directory = new_directory
@@ -207,7 +217,28 @@ class EventHandler(AssistantEventHandler):
                         output += f"\nDirectories in the current directory: {', '.join(directories)}"
                     tool_outputs.append({"tool_call_id": tool.id, "output": output})
                 else:
-                    tool_outputs.append({"tool_call_id": tool.id, "output": "Invalid directory"})
+                    directories_in_current_path = [d for d in os.listdir(current_directory) if os.path.isdir(os.path.join(current_directory, d))]
+                    if directory in directories_in_current_path:
+                        new_directory = os.path.abspath(os.path.join(current_directory, directory))
+                        current_directory = new_directory
+                        output = f"Changed current directory to {current_directory}"
+                        directories = [d for d in os.listdir(current_directory) if os.path.isdir(os.path.join(current_directory, d))]
+                        if directories:
+                            output += f"\nDirectories in the current directory: {', '.join(directories)}"
+                        tool_outputs.append({"tool_call_id": tool.id, "output": output})
+                    elif directory in config["directories"]:
+                        new_directory = config["directories"][directory]
+                        if os.path.exists(new_directory) and os.path.isdir(new_directory):
+                            current_directory = new_directory
+                            output = f"Changed current directory to {current_directory}"
+                            directories = [d for d in os.listdir(current_directory) if os.path.isdir(os.path.join(current_directory, d))]
+                            if directories:
+                                output += f"\nDirectories in the current directory: {', '.join(directories)}"
+                            tool_outputs.append({"tool_call_id": tool.id, "output": output})
+                        else:
+                            tool_outputs.append({"tool_call_id": tool.id, "output": "Invalid directory"})
+                    else:
+                        tool_outputs.append({"tool_call_id": tool.id, "output": "Invalid directory"})
             elif tool.function.name == "get_current_directory":
                 tool_outputs.append({"tool_call_id": tool.id, "output": current_directory})
             elif tool.function.name == "read_file":
@@ -218,8 +249,6 @@ class EventHandler(AssistantEventHandler):
                     tool_outputs.append({"tool_call_id": tool.id, "output": content})
                 except FileNotFoundError:
                     tool_outputs.append({"tool_call_id": tool.id, "output": "File not found"})
-
-
             elif tool.function.name == "execute_file":
                 file_path = json.loads(tool.function.arguments)["file_path"]
                 full_path = os.path.join(current_directory, file_path)
@@ -230,7 +259,7 @@ class EventHandler(AssistantEventHandler):
 
                     while True:
                         try:
-                            reads, _, _ = select.select([process.stdout.fileno(), process.stderr.fileno()], [], [], 1)
+                            reads, _, _ = select.select([process.stdout.fileno(), process.stderr.fileno(), sys.stdin.fileno()], [], [], 1)
                             for fd in reads:
                                 if fd == process.stdout.fileno():
                                     line = process.stdout.readline()
@@ -244,6 +273,12 @@ class EventHandler(AssistantEventHandler):
                                         break
                                     error += line
                                     print(line, end='', file=sys.stderr)
+                                if fd == sys.stdin.fileno():
+                                    if sys.stdin.read(1) == ' ':
+                                        process.kill()
+                                        print(f"\nExecution of {full_path} was interrupted by the user.")
+                                        tool_outputs.append({"tool_call_id": tool.id, "output": f"Execution interrupted by the user."})
+                                        return
 
                             if process.poll() is not None:
                                 break
@@ -251,7 +286,7 @@ class EventHandler(AssistantEventHandler):
                             process.kill()
                             print(f"\nExecution of {full_path} was interrupted by the user.")
                             tool_outputs.append({"tool_call_id": tool.id, "output": f"Execution interrupted by the user."})
-                            break
+                            return
 
                     return_code = process.poll()
                     if return_code != 0:
@@ -262,9 +297,6 @@ class EventHandler(AssistantEventHandler):
                     print(f"Error executing {full_path}:")
                     print(e.output)
                     tool_outputs.append({"tool_call_id": tool.id, "output": f"Error executing file: {str(e)}"})
-
-
-
             elif tool.function.name == "copy_file_or_directory":
                 src_path = json.loads(tool.function.arguments)["src_path"]
                 dst_path = json.loads(tool.function.arguments)["dst_path"]
@@ -303,13 +335,19 @@ class EventHandler(AssistantEventHandler):
                 except Exception as e:
                     tool_outputs.append({"tool_call_id": tool.id, "output": f"Error activating virtual environment: {str(e)}"})
 
-        self.submit_tool_outputs(tool_outputs, run_id)
-
-
-
+        # Check if there are any tool outputs
+        if tool_outputs:
+            self.submit_tool_outputs(tool_outputs, run_id)
+        else:
+            # If there are no tool outputs, submit an empty list
+            self.submit_tool_outputs([], run_id)
 
 
     def submit_tool_outputs(self, tool_outputs, run_id):
+        if not tool_outputs:
+            # If there are no tool outputs, submit an empty list
+            tool_outputs = []
+
         with client.beta.threads.runs.submit_tool_outputs_stream(
             thread_id=self.current_run.thread_id,
             run_id=self.current_run.id,
