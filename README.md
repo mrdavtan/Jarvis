@@ -1,5 +1,7 @@
 # Jarvis: AI-Powered Directory Navigation and Interaction
 
+![image1_converted](https://github.com/mrdavtan/Jarvis/assets/21132073/bc3e8831-216d-4393-904a-5b189c3f7a52)
+
 ![Jarvis AI Assistant](jarvis_ai_assistant.png)
 
 Jarvis is an AI-powered assistant module for navigation and interaction with your local file system. Inspired by the AI character Jarvis from the Iron Man movie, this module provides a seamless and intuitive way to explore and manipulate files and directories using natural language commands.
